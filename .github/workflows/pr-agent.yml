@@ -1,0 +1,120 @@
+name: PR Agent - Summary & Review
+
+# Trigger on PR opened, reopened, synchronized (new commits)
+# OR manual workflow dispatch for retriggering
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+      - master
+      - develop
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to analyze (required for manual runs)'
+        required: true
+        type: number
+
+# Required permissions for the workflow
+permissions:
+  contents: read        # Read repository contents
+  pull-requests: write  # Post comments and request reviewers
+  issues: write        # Comments are posted via issues API
+
+jobs:
+  pr-agent:
+    name: Run PR Agent (Summary + Reviewer)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history for git blame analysis
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate environment
+        run: |
+          echo "::group::Environment Check"
+          echo "✓ Node version: $(node --version)"
+          echo "✓ NPM version: $(npm --version)"
+          echo "✓ Working directory: $(pwd)"
+          echo "✓ Trigger: ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "✓ PR Number (manual): ${{ inputs.pr_number }}"
+          else
+            echo "✓ PR Number (auto): ${{ github.event.pull_request.number }}"
+          fi
+          echo "✓ Repository: ${{ github.repository }}"
+          echo "::endgroup::"
+
+      - name: Validate PR number
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -z "${{ inputs.pr_number }}" ]; then
+              echo "::error::PR number is required for manual runs"
+              exit 1
+            fi
+            echo "✓ Using PR number from workflow input: ${{ inputs.pr_number }}"
+          else
+            echo "✓ Using PR number from event: ${{ github.event.pull_request.number }}"
+          fi
+
+      - name: Run PR Agent (Summary + Reviewer)
+        env:
+          # GitHub context - support both PR events and manual workflow_dispatch
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+
+          # LLM Provider configuration
+          # Using SAP AI Core / Hyperspace (WORKING!)
+          LLM_PROVIDER: 'hyperspace'
+          SAP_AI_CORE_BASE_URL: ${{ secrets.SAP_AI_CORE_BASE_URL }}
+          SAP_AI_CORE_AUTH_URL: ${{ secrets.SAP_AI_CORE_AUTH_URL }}
+          SAP_AI_CORE_CLIENT_ID: ${{ secrets.SAP_AI_CORE_CLIENT_ID }}
+          SAP_AI_CORE_CLIENT_SECRET: ${{ secrets.SAP_AI_CORE_CLIENT_SECRET }}
+          SAP_AI_CORE_RESOURCE_GROUP: ${{ secrets.SAP_AI_CORE_RESOURCE_GROUP || 'default' }}
+          SAP_AI_CORE_TENANT_ID: ${{ secrets.SAP_AI_CORE_TENANT_ID }}
+          HYPERSPACE_DEPLOYMENT_ID: ${{ secrets.HYPERSPACE_DEPLOYMENT_ID }}
+          SAP_AI_USE_ORCHESTRATION: 'true'  # Use orchestration service
+
+          # Alternative: Anthropic Claude (if you prefer external API)
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # LLM_PROVIDER: 'anthropic'
+          # LLM_MODEL: 'claude-sonnet-4-6'
+
+          # Alternative: OpenAI
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # LLM_PROVIDER: 'openai'
+          # LLM_MODEL: 'gpt-4-turbo-preview'
+
+          # GitHub API URL (for SAP GitHub Enterprise Server)
+          GITHUB_API_URL: ${{ secrets.GITHUB_API_URL || 'https://github.tools.sap/api/v3' }}
+
+        run: |
+          echo "::group::Running PR Agent"
+          echo "Starting PR Agent for PR #${PR_NUMBER}..."
+          node src/agent/index.js
+          echo "::endgroup::"
+
+      - name: Agent execution summary
+        if: always()
+        run: |
+          if [ $? -eq 0 ]; then
+            echo "::notice::✓ PR Agent completed successfully"
+          else
+            echo "::error::✗ PR Agent failed. Check logs above for details."
+            exit 1
+          fi

@@ -1,0 +1,51 @@
+# CODEOWNERS - Auto-assign reviewers based on file patterns
+#
+# Each line is a file pattern followed by one or more owners (GitHub usernames or team names)
+# When a PR modifies files matching a pattern, the listed owners are automatically notified
+#
+# Syntax: <file-pattern> @owner1 @owner2 @team-name
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything (unless overridden below)
+* @team-lead @engineering-manager
+
+# CAP/CDS Models - Database layer
+db/** @database-team @cap-experts
+*.cds @cap-experts
+
+# Service Layer - Business logic
+srv/** @backend-team @service-architects
+
+# UI/Fiori Applications
+app/** @frontend-team @ui5-experts
+app/**/*.xml @frontend-team
+app/**/manifest.json @frontend-team
+
+# Configuration files
+*.yaml @devops-team @platform-team
+*.yml @devops-team @platform-team
+package.json @dependency-manager @security-team
+pom.xml @java-team @dependency-manager
+
+# GitHub workflows and CI/CD
+.github/** @devops-team @ci-cd-team
+.github/workflows/** @devops-team
+
+# Security-sensitive files
+*.xsuaa* @security-team
+**/security.* @security-team
+**/*auth* @security-team
+
+# Documentation
+*.md @tech-writer @team-lead
+docs/** @tech-writer
+
+# Test files
+test/** @qa-team @backend-team
+**/*.test.js @qa-team
+**/*.spec.js @qa-team
+
+# Infrastructure and deployment
+deployment/** @devops-team @sre-team
+Dockerfile @devops-team
+.dockerignore @devops-team

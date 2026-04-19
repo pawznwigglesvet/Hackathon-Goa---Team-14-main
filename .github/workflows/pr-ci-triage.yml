@@ -1,0 +1,75 @@
+name: PR Agent - CI Failure Triage
+
+# Trigger when a check suite completes with failure
+on:
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  ci-triage:
+    runs-on: ubuntu-latest
+
+    # Only run if the check suite failed and it's for a PR
+    if: |
+      github.event.check_suite.conclusion == 'failure' &&
+      github.event.check_suite.pull_requests[0] != null
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git blame
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract PR number
+        id: pr
+        run: |
+          PR_NUMBER=$(echo '${{ toJSON(github.event.check_suite.pull_requests) }}' | jq -r '.[0].number')
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "✓ PR Number: $PR_NUMBER"
+
+      - name: Run CI Triage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          LLM_PROVIDER: 'hyperspace'
+          SAP_AI_CORE_BASE_URL: ${{ secrets.SAP_AI_CORE_BASE_URL }}
+          SAP_AI_CORE_AUTH_URL: ${{ secrets.SAP_AI_CORE_AUTH_URL }}
+          SAP_AI_CORE_CLIENT_ID: ${{ secrets.SAP_AI_CORE_CLIENT_ID }}
+          SAP_AI_CORE_CLIENT_SECRET: ${{ secrets.SAP_AI_CORE_CLIENT_SECRET }}
+          SAP_AI_CORE_RESOURCE_GROUP: ${{ secrets.SAP_AI_CORE_RESOURCE_GROUP }}
+          SAP_AI_CORE_TENANT_ID: ${{ secrets.SAP_AI_CORE_TENANT_ID }}
+          HYPERSPACE_DEPLOYMENT_ID: ${{ secrets.HYPERSPACE_DEPLOYMENT_ID }}
+          SAP_AI_USE_ORCHESTRATION: 'true'
+          GITHUB_API_URL: https://github.tools.sap/api/v3
+          RUN_CI_TRIAGE: 'true'  # Flag to run only CI triage
+        run: |
+          echo "::group::Running CI Triage"
+          echo "Analyzing failed CI run for PR #${PR_NUMBER}"
+          node src/agent/index.js
+          echo "::endgroup::"
+
+      - name: Report status
+        if: always()
+        run: |
+          if [ $? -eq 0 ]; then
+            echo "::notice::✓ CI triage analysis posted to PR"
+          else
+            echo "::error::✗ CI triage failed. Check logs for details."
+            exit 1
+          fi

@@ -1,0 +1,122 @@
+name: Merge Conflict Resolver
+
+# Trigger when PR has merge conflicts
+# This workflow runs when:
+# 1. A PR is opened, synchronized, or reopened
+# 2. The PR has merge conflicts (mergeable: false)
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+      - master
+      - develop
+
+# Required permissions
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-conflicts:
+    name: Check for Merge Conflicts
+    runs-on: ubuntu-latest
+    outputs:
+      has_conflicts: ${{ steps.check.outputs.has_conflicts }}
+
+    steps:
+      - name: Check PR mergeable status
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Get PR details
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+
+            console.log(`PR #${pr.number} mergeable: ${pr.mergeable}`);
+            console.log(`PR #${pr.number} mergeable_state: ${pr.mergeable_state}`);
+
+            // If mergeable is null, GitHub is still computing - wait and retry
+            if (pr.mergeable === null) {
+              console.log('Waiting for GitHub to compute mergeable status...');
+              await new Promise(resolve => setTimeout(resolve, 5000));
+              
+              const { data: prRetry } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number
+              });
+              
+              console.log(`PR #${prRetry.number} mergeable (retry): ${prRetry.mergeable}`);
+              core.setOutput('has_conflicts', prRetry.mergeable === false ? 'true' : 'false');
+            } else {
+              core.setOutput('has_conflicts', pr.mergeable === false ? 'true' : 'false');
+            }
+
+  resolve-conflicts:
+    name: Analyze & Suggest Resolutions
+    runs-on: ubuntu-latest
+    needs: check-conflicts
+    if: needs.check-conflicts.outputs.has_conflicts == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Conflict Resolver Agent
+        env:
+          # GitHub context
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          GITHUB_API_URL: ${{ secrets.GITHUB_API_URL || 'https://api.github.com' }}
+
+          # LLM Provider configuration (SAP AI Core / Hyperspace)
+          LLM_PROVIDER: 'hyperspace'
+          SAP_AI_CORE_BASE_URL: ${{ secrets.SAP_AI_CORE_BASE_URL }}
+          SAP_AI_CORE_AUTH_URL: ${{ secrets.SAP_AI_CORE_AUTH_URL }}
+          SAP_AI_CORE_CLIENT_ID: ${{ secrets.SAP_AI_CORE_CLIENT_ID }}
+          SAP_AI_CORE_CLIENT_SECRET: ${{ secrets.SAP_AI_CORE_CLIENT_SECRET }}
+          SAP_AI_CORE_RESOURCE_GROUP: ${{ secrets.SAP_AI_CORE_RESOURCE_GROUP || 'default' }}
+          SAP_AI_CORE_TENANT_ID: ${{ secrets.SAP_AI_CORE_TENANT_ID }}
+          HYPERSPACE_DEPLOYMENT_ID: ${{ secrets.HYPERSPACE_DEPLOYMENT_ID }}
+          SAP_AI_USE_ORCHESTRATION: 'true'
+
+        run: |
+          echo "::group::Running Conflict Resolver Agent"
+          echo "Analyzing merge conflicts for PR #${PR_NUMBER}..."
+          node src/conflict-resolver/index.js
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "::notice::Conflict Resolver completed. Check PR comments for resolution suggestions."
+
+  no-conflicts:
+    name: No Conflicts Detected
+    runs-on: ubuntu-latest
+    needs: check-conflicts
+    if: needs.check-conflicts.outputs.has_conflicts == 'false'
+
+    steps:
+      - name: Log status
+        run: |
+          echo "::notice::PR has no merge conflicts. No action needed."
